@@ -2135,7 +2135,7 @@ class AdvancedPhysicsLoss(nn.Module):
         return 1.0 - r.mean()
 
     def forward(self, pred_img, target_img):
-        # Strong intensity normalization BEFORE all physics terms (requirement #8)
+        # Strong intensity normalization BEFORE all physics terms
         pred_n = self.instance_norm(pred_img)
         tgt_n  = self.instance_norm(target_img)
 
@@ -2900,7 +2900,7 @@ class DualStemNet(nn.Module):
         h = self.fuse(torch.cat([feat, cond], dim=1))
         z = self.emb_head(h)
 
-        # residual log-space diameter (requirement #6)
+        # residual log-space diameter
         delta_raw = self.delta_head(h)
         delta = self.config.DELTA_CLIP * torch.tanh(delta_raw)  # smooth clip
         log_d = c + delta
@@ -2935,7 +2935,7 @@ class DualStemNet(nn.Module):
 # 8. Weak + Pair losses
 # =========================================================
 def weak_guidance_rel(pred, coarse, tolerance=0.1):
-    # Continuous, relative-normalized deviation outside band (requirement #1)
+    # Continuous, relative-normalized deviation outside band
     ratio = pred / coarse.clamp_min(1e-6)
     lower = 1.0 - tolerance
     upper = 1.0 + tolerance
@@ -3066,7 +3066,7 @@ def validate_unified(model, physics, val_loader, config, adv_phys_loss):
                     preds_by_realid[rid].append(val)
 
             if config.ENABLE_PHYS:
-                # physics compares normalized intensities inside AdvancedPhysicsLoss (requirement #8/#9)
+                # physics compares normalized intensities inside AdvancedPhysicsLoss
                 with torch.cuda.amp.autocast(enabled=False):
                     img_pred = physics(d_final.float(), rp_phys.float(), target_real_img=full_input[:, 0:1].float())
                 if getattr(config, 'ENABLE_PHYS_DEBUG_PRINT', False) and phys_debug_batches < getattr(config, 'PHYS_DEBUG_PRINT_FIRST_N_BATCHES', 1):
@@ -3115,7 +3115,7 @@ def validate_unified(model, physics, val_loader, config, adv_phys_loss):
     # helps select models with better pair consistency (no GT dependency)
     w_pair_eff = float(config.SCORE_W_PAIR) * float(getattr(config, "SCORE_W_PAIR_BOOST", 1.0))
 
-    # Continuous, relative-normalized selection score (no hard jumps) (requirement #1)
+    # Continuous, relative-normalized selection score (no hard jumps)
     # NOTE: No GT information used - this is an unsupervised measurement system
     selection_score = (
         config.SCORE_W_PHYS * avg_phys
@@ -3584,7 +3584,7 @@ def ensure_main_required_artifacts(config: 'TrainConfig', *, attempt: int = 1) -
     except Exception as e:
         print(f"[AutoRepair] FFT cache repair failed: {e!r}")
 # =========================================================
-# 14. Main Loop (rewritten per requirements)
+# 14. Main Loop
 # =========================================================
 def main(config: TrainConfig):
     # Best-effort auto-repair of required artifacts before any dataset checks.
@@ -3826,7 +3826,7 @@ def main(config: TrainConfig):
                 sp_n = normalize_params5(sp).to(rp_n.device)
                 params = torch.cat([rp_n, sp_n], dim=1)
 
-                # branch inputs (requirement #3)
+                # branch inputs
                 x_real4 = torch.cat([full_input[:, 0:2], full_input[:, 4:6]], dim=1)  # real+diff (4ch)
                 x_sim2 = sim_pt  # sim (2ch)
 
@@ -3847,18 +3847,18 @@ def main(config: TrainConfig):
                 enable_other_losses = (scales.get('phys', 1.0) > 1e-6 or scales.get('weak', 1.0) > 1e-6 or 
                                       scales.get('vic', 1.0) > 1e-6)
                 
-                # PairCons only for paired samples (requirement #4)
+                # PairCons only for paired samples
                 if config.ENABLE_PAIRCONS:
                     L_pair = pair_consistency_loss_logd(log_d, target_a.squeeze(1), is_paired)
                 else:
                     L_pair = torch.tensor(0.0, device='cuda', requires_grad=True)
 
-                # Weak guidance (continuous + relative) (requirement #1)
+                # Weak guidance (continuous + relative)
                 L_weak = torch.tensor(0.0, device='cuda')
                 if config.ENABLE_WEAK and enable_other_losses and scales.get('weak', 0.0) > 1e-6:
                     L_weak = weak_guidance_rel(d_um, coarse, config.WEAK_TOLERANCE)
 
-                # Physics (normalized + low-freq band) (requirement #8/#9)
+                # Physics (normalized + low-freq band)
                 # Use reduced phys weight for bad seeds if configured
                 w_phys_base = float(getattr(config, "W_PHYS_REDUCED", config.W_PHYS))
                 L_phys = torch.tensor(0.0, device='cuda')
@@ -3867,7 +3867,7 @@ def main(config: TrainConfig):
                     img_pred = physics(d_um, rp_phys, target_real_img=full_input[:, 0:1])
                     L_phys, l_corr, l_fft, l_grad = adv_phys_loss(img_pred, full_input[:, 0:1])
 
-                # VICReg alignment (anti-collapse) (requirement #2/#3)
+                # VICReg alignment (anti-collapse)
                 L_vic = torch.tensor(0.0, device='cuda')
                 vic_inv = torch.tensor(0.0, device='cuda')
                 vic_var = torch.tensor(0.0, device='cuda')
@@ -3883,7 +3883,7 @@ def main(config: TrainConfig):
                     return_components=True
                 )
 
-                # TTA / Group on embedding only, with decay (requirement #5)
+                # TTA / Group on embedding only, with decay
                 L_tta = torch.tensor(0.0, device='cuda')
                 if config.ENABLE_TTA_EMB and config.TTA_NUM_TRAIN > 1 and w_tta > 1e-6 and enable_other_losses and scales.get('tta', 0.0) > 1e-6:
                     zs = []
