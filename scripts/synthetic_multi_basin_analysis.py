@@ -30,9 +30,6 @@ import matplotlib.pyplot as plt
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 
-
-# --- Style Configuration (Nature Methods-ish, aligned to unified_mismatch_analysis.py) ---
-
 def set_pub_style():
     plt.rcParams.update({
         'font.size': 7,
