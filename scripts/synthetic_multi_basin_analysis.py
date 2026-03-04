@@ -37,7 +37,7 @@ def set_pub_style():
     plt.rcParams.update({
         'font.size': 7,
         'font.family': 'sans-serif',
-        'font.sans-serif': ['Arial'],
+        'font.sans-serif': ['DejaVu Sans', 'Liberation Sans', 'Arial'],
         'axes.linewidth': 1.0,
         'axes.edgecolor': '#333333',
         'axes.labelcolor': '#333333',
@@ -207,6 +207,31 @@ def worker_landscape_row_min(
     return row
 
 
+def worker_landscape_row_gamma_min_over_r(
+    gm: float,
+    a_grid: np.ndarray,
+    y_meas_norm: np.ndarray,
+    theta_obs: np.ndarray,
+    wavelength_um: float,
+    focal_length_um: float,
+    r_grid_um: np.ndarray,
+) -> np.ndarray:
+    """For a fixed gamma, compute loss(a, gamma) minimized over r."""
+    row = np.zeros(len(a_grid), dtype=np.float64)
+    gm = float(gm)
+    for j, a in enumerate(a_grid):
+        best = math.inf
+        for r_um in r_grid_um:
+            th = _theta_shift(theta_obs, r_um=float(r_um), focal_length_um=focal_length_um)
+            I0 = fraunhofer_intensity_1d(float(a), th, wavelength_um)
+            I = np.power(np.clip(I0, 0.0, None), gm)
+            L = loss_norm_l2(y_meas_norm, I)
+            if L < best:
+                best = L
+        row[j] = float(best)
+    return row
+
+
 # ============================
 # Plot helpers
 # ============================
@@ -242,25 +267,26 @@ def save_multifigure(
     waveform_curves: list[dict],
     a_grid: np.ndarray,
     best_losses: np.ndarray,
+    best_r: np.ndarray,
+    best_gamma: np.ndarray,
     a_true: float,
     equiv_mask: np.ndarray,
     L_min: np.ndarray,
     a_sub: np.ndarray,
     r_sub: np.ndarray,
-    title_suffix: str,
+    r_true: float,
 ):
     """High-density multi-panel figure for coupling/multi-solution."""
 
     fig = plt.figure(figsize=(7.2, 6.8))
-    # Adjusted layout to accommodate labels and legends
     gs = fig.add_gridspec(3, 2, hspace=0.65, wspace=0.45, left=0.12, right=0.82, top=0.92, bottom=0.1)
 
     axA = fig.add_subplot(gs[0, 0])
     axB = fig.add_subplot(gs[0, 1])
     axC = fig.add_subplot(gs[1, 0])
-    axD = fig.add_subplot(gs[1, 1]) # Zoomed panel
+    axD = fig.add_subplot(gs[1, 1])
     axE = fig.add_subplot(gs[2, 0])
-    axF = fig.add_subplot(gs[2, 1], projection='3d')
+    axF = fig.add_subplot(gs[2, 1])
 
     # A: measured vs predicted waveforms
     y_axis = np.tan(theta_obs) * focal_length_um
@@ -272,7 +298,6 @@ def save_multifigure(
     axA.set_xlabel('y (µm)', fontsize=7)
     axA.set_ylabel('intensity', fontsize=7)
     axA.set_title('Waveforms', fontsize=8)
-    # Legend moved further right to avoid overlapping waveform
     axA.legend(loc='upper left', bbox_to_anchor=(1.05, 1.05), fontsize=5.5, frameon=False, handlelength=1.2)
     _style_ax(axA, grid_axis='both')
     _panel_label(axA, 'a')
@@ -287,7 +312,7 @@ def save_multifigure(
     _style_ax(axB, grid_axis='both')
     _panel_label(axB, 'b')
 
-    # C: best loss vs a (min over r,gamma)
+    # C: min loss vs a (min over r,gamma)
     axC.plot(a_grid, best_losses, color=PALETTE['blue'], lw=1.2)
     axC.fill_between(a_grid, best_losses, float(np.min(best_losses)), where=equiv_mask, color=PALETTE['blue'], alpha=0.2)
     axC.axvline(a_true, color=PALETTE['orange'], ls='--', lw=1.2)
@@ -295,14 +320,29 @@ def save_multifigure(
     axC.set_ylabel('min loss', fontsize=7)
     axC.set_title('Loss vs Diameter', fontsize=8)
     _style_ax(axC, grid_axis='both')
+
+    # C right axis: best gamma at each a (aligned to panel-c x)
+    axC2 = axC.twinx()
+    axC2.plot(a_grid, best_gamma, color=PALETTE['purple'], lw=1.0, ls='--', alpha=0.9)
+    axC2.set_ylabel('best γ', fontsize=7, color=PALETTE['purple'])
+    axC2.tick_params(axis='y', labelsize=6, colors=PALETTE['purple'])
+    axC2.spines['right'].set_visible(True)
+    axC2.spines['right'].set_linewidth(1.0)
+    axC2.spines['right'].set_color('#333333')
     _panel_label(axC, 'c')
 
-    # D: Zoomed view of Panel C near true a (±1%)
+    # D: Zoomed view of panel C near true a (±1%)
     zoom_range = 0.01
     zoom_mask = (a_grid >= a_true * (1 - zoom_range)) & (a_grid <= a_true * (1 + zoom_range))
     axD.plot(a_grid[zoom_mask], best_losses[zoom_mask], color=PALETTE['blue'], lw=1.5)
-    axD.fill_between(a_grid[zoom_mask], best_losses[zoom_mask], float(np.min(best_losses)), 
-                     where=equiv_mask[zoom_mask], color=PALETTE['blue'], alpha=0.3)
+    axD.fill_between(
+        a_grid[zoom_mask],
+        best_losses[zoom_mask],
+        float(np.min(best_losses)),
+        where=equiv_mask[zoom_mask],
+        color=PALETTE['blue'],
+        alpha=0.3,
+    )
     axD.axvline(a_true, color=PALETTE['orange'], ls='--', lw=1.5)
     axD.set_xlabel('a (µm)', fontsize=7)
     axD.set_ylabel('min loss', fontsize=7)
@@ -310,83 +350,153 @@ def save_multifigure(
     _style_ax(axD, grid_axis='both')
     _panel_label(axD, 'd')
 
-    # Add zoom lines from C to D using ConnectionPatch
     from matplotlib.patches import ConnectionPatch
     y_min_c, y_max_c = axC.get_ylim()
     x_start, x_end = a_true * (1 - zoom_range), a_true * (1 + zoom_range)
-    
-    # Draw rectangle in axC showing the zoom area
-    rect = plt.Rectangle((x_start, y_min_c), x_end - x_start, y_max_c - y_min_c, 
-                         fill=False, edgecolor=PALETTE['gray'], ls='--', lw=1.0, alpha=0.6)
+    rect = plt.Rectangle(
+        (x_start, y_min_c),
+        x_end - x_start,
+        y_max_c - y_min_c,
+        fill=False,
+        edgecolor=PALETTE['gray'],
+        ls='--',
+        lw=1.0,
+        alpha=0.6,
+    )
     axC.add_patch(rect)
 
-    # 4 connection lines to show the zoom effect from corners of box in C to corners of D axis
-    con_tl = ConnectionPatch(xyA=(x_start, y_max_c), xyB=(0, 1), coordsA="data", coordsB="axes fraction",
-                             axesA=axC, axesB=axD, color=PALETTE['gray'], lw=1.0, ls='--', alpha=0.4)
-    con_tr = ConnectionPatch(xyA=(x_end, y_max_c), xyB=(1, 1), coordsA="data", coordsB="axes fraction",
-                             axesA=axC, axesB=axD, color=PALETTE['gray'], lw=1.0, ls='--', alpha=0.4)
-    con_bl = ConnectionPatch(xyA=(x_start, y_min_c), xyB=(0, 0), coordsA="data", coordsB="axes fraction",
-                             axesA=axC, axesB=axD, color=PALETTE['gray'], lw=1.0, ls='--', alpha=0.4)
-    con_br = ConnectionPatch(xyA=(x_end, y_min_c), xyB=(1, 0), coordsA="data", coordsB="axes fraction",
-                             axesA=axC, axesB=axD, color=PALETTE['gray'], lw=1.0, ls='--', alpha=0.4)
-    
+    con_tl = ConnectionPatch(xyA=(x_start, y_max_c), xyB=(0, 1), coordsA='data', coordsB='axes fraction', axesA=axC, axesB=axD, color=PALETTE['gray'], lw=1.0, ls='--', alpha=0.4)
+    con_tr = ConnectionPatch(xyA=(x_end, y_max_c), xyB=(1, 1), coordsA='data', coordsB='axes fraction', axesA=axC, axesB=axD, color=PALETTE['gray'], lw=1.0, ls='--', alpha=0.4)
+    con_bl = ConnectionPatch(xyA=(x_start, y_min_c), xyB=(0, 0), coordsA='data', coordsB='axes fraction', axesA=axC, axesB=axD, color=PALETTE['gray'], lw=1.0, ls='--', alpha=0.4)
+    con_br = ConnectionPatch(xyA=(x_end, y_min_c), xyB=(1, 0), coordsA='data', coordsB='axes fraction', axesA=axC, axesB=axD, color=PALETTE['gray'], lw=1.0, ls='--', alpha=0.4)
     for con in [con_tl, con_tr, con_bl, con_br]:
         fig.add_artist(con)
 
-    # E: min landscape 2D
-    imE = axE.imshow(
-        L_min,
-        origin='lower',
-        aspect='auto',
-        extent=[float(a_sub[0]), float(a_sub[-1]), float(r_sub[0]), float(r_sub[-1])],
-        cmap='viridis',
-    )
-    axE.set_title('Coupled Landscape', fontsize=8)
+    # E: iso-loss contour map on (a, r), min over gamma
+    AA, RR = np.meshgrid(a_sub, r_sub)
+    cf = axE.contourf(AA, RR, L_min, levels=18, cmap='viridis')
+    c_lines = axE.contour(AA, RR, L_min, levels=8, colors='white', linewidths=0.6, alpha=0.7)
+    axE.clabel(c_lines, inline=True, fontsize=5, fmt='%.1e')
+    axE.axvline(a_true, color=PALETTE['orange'], ls='--', lw=1.2, label='true a')
+    axE.axhline(r_true, color=PALETTE['green'], ls='--', lw=1.1, label='true r')
+    axE.set_title('Iso-loss contour (min over γ)', fontsize=8, fontweight='semibold')
     axE.set_xlabel('a (µm)', fontsize=7)
     axE.set_ylabel('r (µm)', fontsize=7)
-    cbarE = fig.colorbar(imE, ax=axE, fraction=0.046, pad=0.04)
+    cbarE = fig.colorbar(cf, ax=axE, fraction=0.046, pad=0.04)
+    cbarE.set_label('loss', fontsize=6)
     cbarE.ax.tick_params(labelsize=6)
+    axE.legend(loc='upper right', fontsize=5.6, frameon=False, handlelength=1.5)
+    _style_ax(axE, grid_axis='both')
     _panel_label(axE, 'e')
 
-    # F: 3D surface of min landscape
-    AA, RR = np.meshgrid(a_sub, r_sub)
-    axF.plot_surface(AA, RR, L_min, cmap='viridis', edgecolor='none', alpha=0.8)
-    axF.set_title('3D Error Surface', fontsize=8)
-    axF.set_xlabel('a', fontsize=6)
-    axF.set_ylabel('r', fontsize=6)
-    axF.set_zlabel('loss', fontsize=6)
-    axF.tick_params(labelsize=5)
-    axF.view_init(elev=25, azim=45)
-    _panel_label(axF, 'f')
-
-    fig.savefig(f"{out_path_no_ext}.pdf", dpi=600)
-    fig.savefig(f"{out_path_no_ext}.png", dpi=300)
-    plt.close(fig)
-
-    # E: min landscape 2D
-    imE = axE.imshow(
-        L_min,
-        origin='lower',
-        aspect='auto',
-        extent=[float(a_sub[0]), float(a_sub[-1]), float(r_sub[0]), float(r_sub[-1])],
-        cmap='viridis',
+    # F: equivalent-solution cloud (legend uses category proxies; color meaning in colorbar)
+    axF.scatter(
+        a_grid,
+        best_gamma,
+        color='#C9C9C9',
+        s=10,
+        alpha=0.35,
+        edgecolors='none',
     )
-    axE.set_title('Coupled Landscape', fontsize=9)
-    axE.set_xlabel('a (µm)', fontsize=8)
-    axE.set_ylabel('r (µm)', fontsize=8)
-    cbarE = fig.colorbar(imE, ax=axE, fraction=0.046, pad=0.04)
-    cbarE.ax.tick_params(labelsize=6)
-    _panel_label(axE, 'e')
 
-    # F: 3D surface of min landscape
-    AA, RR = np.meshgrid(a_sub, r_sub)
-    axF.plot_surface(AA, RR, L_min, cmap='viridis', edgecolor='none', alpha=0.8)
-    axF.set_title('3D Error Surface', fontsize=9)
-    axF.set_xlabel('a', fontsize=7)
-    axF.set_ylabel('r', fontsize=7)
-    axF.set_zlabel('loss', fontsize=7)
-    axF.tick_params(labelsize=6)
-    axF.view_init(elev=25, azim=45)
+    n_equiv = int(np.sum(equiv_mask))
+    if n_equiv >= 2:
+        sc = axF.scatter(
+            a_grid[equiv_mask],
+            best_gamma[equiv_mask],
+            c=best_r[equiv_mask],
+            cmap='coolwarm',
+            s=24,
+            alpha=0.92,
+            edgecolors='none',
+        )
+        cbarF = fig.colorbar(sc, ax=axF, fraction=0.046, pad=0.04)
+        cbarF.set_label('best r (µm)', fontsize=6)
+        cbarF.ax.tick_params(labelsize=6)
+    else:
+        axF.scatter(
+            a_grid[equiv_mask],
+            best_gamma[equiv_mask],
+            color=PALETTE['purple'],
+            s=30,
+            alpha=0.95,
+            edgecolors='none',
+        )
+
+    axF.axvline(a_true, color=PALETTE['orange'], ls='--', lw=1.2)
+    axF.set_title('Equivalent-solution cloud', fontsize=8, fontweight='semibold')
+    axF.set_xlabel('a (µm)', fontsize=7)
+    axF.set_ylabel('best γ', fontsize=7)
+
+    from matplotlib.lines import Line2D
+    from matplotlib.legend_handler import HandlerBase
+    from matplotlib.patches import FancyBboxPatch, Rectangle
+
+    class ColormapCapsule:
+        pass
+
+    class HandlerColormapCapsule(HandlerBase):
+        def __init__(self, cmap, n_strips=20):
+            super().__init__()
+            self.cmap = cmap
+            self.n_strips = n_strips
+
+        def create_artists(self, legend, orig_handle, xdescent, ydescent, width, height, fontsize, trans):
+            pad_w = width * 0.04
+            pad_h = height * 0.18
+            x0 = xdescent + pad_w
+            y0 = ydescent + pad_h
+            w = width - 2 * pad_w
+            h = height - 2 * pad_h
+            rounding = h / 2.0
+
+            capsule = FancyBboxPatch(
+                (x0, y0),
+                w,
+                h,
+                boxstyle=f"round,pad=0,rounding_size={rounding}",
+                transform=trans,
+                facecolor='none',
+                edgecolor='#444444',
+                linewidth=0.35,
+            )
+
+            artists = []
+            for i in range(self.n_strips):
+                t = (i + 0.5) / self.n_strips
+                strip = Rectangle(
+                    (x0 + i * w / self.n_strips, y0),
+                    w / self.n_strips + 1e-6,
+                    h,
+                    transform=trans,
+                    facecolor=self.cmap(0.08 + 0.84 * t),
+                    edgecolor='none',
+                    alpha=0.96,
+                )
+                strip.set_clip_path(capsule)
+                artists.append(strip)
+
+            artists.append(capsule)
+            return artists
+
+    equiv_handle = ColormapCapsule()
+    legend_handles = [
+        Line2D([0], [0], marker='o', color='none', markerfacecolor='#C9C9C9', markeredgecolor='none', markersize=4.8, alpha=0.7),
+        equiv_handle,
+        Line2D([0], [0], color=PALETTE['orange'], lw=1.2, ls='--'),
+    ]
+    legend_labels = ['all candidates', 'equivalent solutions', 'true a']
+
+    axF.legend(
+        handles=legend_handles,
+        labels=legend_labels,
+        loc='upper right',
+        fontsize=5.6,
+        frameon=False,
+        handlelength=1.6,
+        handler_map={ColormapCapsule: HandlerColormapCapsule(plt.get_cmap('coolwarm'))},
+    )
+    _style_ax(axF, grid_axis='both')
     _panel_label(axF, 'f')
 
     fig.savefig(f"{out_path_no_ext}.pdf", dpi=600)
@@ -397,6 +507,117 @@ def save_multifigure(
 # ============================
 # Main
 # ============================
+
+def save_candidate_best_nuisance_tracks(*, out_path_no_ext: str, a_grid: np.ndarray, best_losses: np.ndarray, best_r: np.ndarray, best_gamma: np.ndarray, a_true: float, equiv_mask: np.ndarray):
+    fig, ax1 = plt.subplots(figsize=(4.2, 3.0))
+    ax1.plot(a_grid, best_losses, color=PALETTE['blue'], lw=1.4, label='min loss')
+    ax1.fill_between(a_grid, best_losses, float(np.min(best_losses)), where=equiv_mask, color=PALETTE['blue'], alpha=0.20)
+    ax1.axvline(a_true, color=PALETTE['orange'], ls='--', lw=1.2)
+    ax1.set_xlabel('a (µm)', fontsize=8)
+    ax1.set_ylabel('min loss', fontsize=8, color=PALETTE['blue'])
+    ax1.tick_params(axis='y', labelcolor=PALETTE['blue'])
+    _style_ax(ax1, grid_axis='both')
+
+    ax2 = ax1.twinx()
+    ax2.plot(a_grid, best_gamma, color=PALETTE['purple'], ls='--', lw=1.1, label='best γ')
+    ax2.plot(a_grid, best_r, color=PALETTE['green'], ls='-.', lw=1.1, label='best r')
+    ax2.set_ylabel('best γ / best r (µm)', fontsize=8)
+    ax2.tick_params(labelsize=6)
+
+    lines = ax1.get_lines() + ax2.get_lines()
+    labels = [l.get_label() for l in lines]
+    ax1.legend(lines, labels, loc='upper right', fontsize=6)
+    ax1.set_title('Coupling tracks along a', fontsize=8)
+
+    fig.savefig(f"{out_path_no_ext}.pdf", dpi=600)
+    fig.savefig(f"{out_path_no_ext}.png", dpi=300)
+    plt.close(fig)
+
+
+def save_candidate_iso_contour(*, out_path_no_ext: str, L_min: np.ndarray, a_sub: np.ndarray, r_sub: np.ndarray, a_true: float, r_true: float):
+    fig, ax = plt.subplots(figsize=(4.2, 3.0))
+    AA, RR = np.meshgrid(a_sub, r_sub)
+    csf = ax.contourf(AA, RR, L_min, levels=18, cmap='viridis')
+    cs = ax.contour(AA, RR, L_min, levels=8, colors='white', linewidths=0.5, alpha=0.7)
+    ax.clabel(cs, inline=True, fontsize=5, fmt='%.2e')
+    cbar = fig.colorbar(csf, ax=ax, fraction=0.046, pad=0.04)
+    cbar.ax.tick_params(labelsize=6)
+    ax.axvline(a_true, color=PALETTE['orange'], ls='--', lw=1.2)
+    ax.axhline(r_true, color=PALETTE['green'], ls='--', lw=1.0)
+    ax.set_xlabel('a (µm)', fontsize=8)
+    ax.set_ylabel('r (µm)', fontsize=8)
+    ax.set_title('Iso-loss contours on (a, r)', fontsize=8)
+    _style_ax(ax, grid_axis='both')
+    fig.savefig(f"{out_path_no_ext}.pdf", dpi=600)
+    fig.savefig(f"{out_path_no_ext}.png", dpi=300)
+    plt.close(fig)
+
+
+def save_candidate_equiv_scatter(*, out_path_no_ext: str, a_grid: np.ndarray, best_r: np.ndarray, best_gamma: np.ndarray, equiv_mask: np.ndarray, a_true: float):
+    fig, ax = plt.subplots(figsize=(4.2, 3.0))
+
+    ax.scatter(
+        a_grid,
+        best_gamma,
+        color='#C9C9C9',
+        s=10,
+        alpha=0.35,
+        edgecolors='none',
+        label='all candidates',
+    )
+
+    n_equiv = int(np.sum(equiv_mask))
+    if n_equiv >= 2:
+        sc = ax.scatter(
+            a_grid[equiv_mask],
+            best_gamma[equiv_mask],
+            c=best_r[equiv_mask],
+            cmap='coolwarm',
+            s=24,
+            alpha=0.92,
+            edgecolors='none',
+            label='equivalent solutions',
+        )
+        cbar = fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label('best r (µm)', fontsize=7)
+        cbar.ax.tick_params(labelsize=6)
+    else:
+        ax.scatter(
+            a_grid[equiv_mask],
+            best_gamma[equiv_mask],
+            color=PALETTE['purple'],
+            s=30,
+            alpha=0.95,
+            edgecolors='none',
+            label='equivalent solution',
+        )
+
+    ax.axvline(a_true, color=PALETTE['orange'], ls='--', lw=1.2, label='true a')
+    ax.set_xlabel('a (µm)', fontsize=8)
+    ax.set_ylabel('best γ', fontsize=8)
+    ax.set_title('Equivalent-solution cloud', fontsize=8, fontweight='semibold')
+    ax.legend(loc='upper right', fontsize=6, frameon=False, handlelength=1.5)
+    _style_ax(ax, grid_axis='both')
+    fig.savefig(f"{out_path_no_ext}.pdf", dpi=600)
+    fig.savefig(f"{out_path_no_ext}.png", dpi=300)
+    plt.close(fig)
+
+
+def save_candidate_loss_slices(*, out_path_no_ext: str, a_sub: np.ndarray, r_sub: np.ndarray, L_min: np.ndarray, a_true: float):
+    fig, ax = plt.subplots(figsize=(4.2, 3.0))
+    idxs = np.linspace(0, len(r_sub) - 1, 6).astype(int)
+    for idx in idxs:
+        ax.plot(a_sub, L_min[idx, :], lw=1.0, label=f'r={r_sub[idx]:.0f} µm')
+    ax.axvline(a_true, color=PALETTE['orange'], ls='--', lw=1.2)
+    ax.set_xlabel('a (µm)', fontsize=8)
+    ax.set_ylabel('min loss over γ', fontsize=8)
+    ax.set_title('Loss slices at selected r', fontsize=8)
+    ax.legend(fontsize=5.5, ncol=2, loc='upper right')
+    _style_ax(ax, grid_axis='both')
+    fig.savefig(f"{out_path_no_ext}.pdf", dpi=600)
+    fig.savefig(f"{out_path_no_ext}.png", dpi=300)
+    plt.close(fig)
+
 
 def run():
     import pandas as pd
@@ -552,22 +773,7 @@ def run():
                 'pred_norm': normalize_max(I),
             })
 
-        # 2) landscapes raw vs envelope
-        gamma_fixed = gamma_true
-
-        with ProcessPoolExecutor(max_workers=num_cpus) as ex:
-            func_raw = partial(
-                worker_landscape_row_raw,
-                a_sub=a_sub,
-                y_meas_norm=y_meas_norm,
-                theta_obs=theta_obs,
-                wavelength_um=wavelength_um,
-                focal_length_um=focal_length_um,
-                gamma_fixed=gamma_fixed,
-            )
-            rows_raw = list(ex.map(func_raw, r_sub))
-        L_raw = np.vstack(rows_raw)
-
+        # 2) landscape envelope: L_min(a, r) = min_gamma loss(a, r, gamma)
         with ProcessPoolExecutor(max_workers=num_cpus) as ex:
             func_min = partial(
                 worker_landscape_row_min,
@@ -581,8 +787,7 @@ def run():
             rows_min = list(ex.map(func_min, r_sub))
         L_min = np.vstack(rows_min)
 
-        # multi-panel figure
-        title_suffix = f"({case_id})"
+        # multi-panel figure (panel e: iso-contour; panel f: equivalent cloud)
         out_path_no_ext = os.path.join(case_dir, f"Fig_coupling_multipanel__{case_id}")
         save_multifigure(
             out_path_no_ext=out_path_no_ext,
@@ -593,12 +798,54 @@ def run():
             waveform_curves=waveform_curves,
             a_grid=a_grid,
             best_losses=best_losses,
+            best_r=best_r,
+            best_gamma=best_gamma,
             a_true=a_true,
             equiv_mask=equiv_mask,
             L_min=L_min,
             a_sub=a_sub,
             r_sub=r_sub,
-            title_suffix=title_suffix,
+            r_true=r_true_um,
+        )
+
+        # candidate figure 1: best nuisance tracks along a
+        save_candidate_best_nuisance_tracks(
+            out_path_no_ext=os.path.join(case_dir, f"Fig_candidate_best_tracks__{case_id}"),
+            a_grid=a_grid,
+            best_losses=best_losses,
+            best_r=best_r,
+            best_gamma=best_gamma,
+            a_true=a_true,
+            equiv_mask=equiv_mask,
+        )
+
+        # candidate figure 2: iso-loss contour on (a, r)
+        save_candidate_iso_contour(
+            out_path_no_ext=os.path.join(case_dir, f"Fig_candidate_iso_contour__{case_id}"),
+            L_min=L_min,
+            a_sub=a_sub,
+            r_sub=r_sub,
+            a_true=a_true,
+            r_true=r_true_um,
+        )
+
+        # candidate figure 3: equivalent-solution cloud
+        save_candidate_equiv_scatter(
+            out_path_no_ext=os.path.join(case_dir, f"Fig_candidate_equiv_cloud__{case_id}"),
+            a_grid=a_grid,
+            best_r=best_r,
+            best_gamma=best_gamma,
+            equiv_mask=equiv_mask,
+            a_true=a_true,
+        )
+
+        # candidate figure 4: loss slices at selected r
+        save_candidate_loss_slices(
+            out_path_no_ext=os.path.join(case_dir, f"Fig_candidate_loss_slices__{case_id}"),
+            a_sub=a_sub,
+            r_sub=r_sub,
+            L_min=L_min,
+            a_true=a_true,
         )
 
         summary_rows.append({
