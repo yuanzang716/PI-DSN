@@ -11,7 +11,6 @@ Key requirements:
 - Panels B/D show representative sim (median corr) to preserve fringe details.
 - Panels E/F/G/H show per-real distributions across all paired sims (violin + box).
 - Panel I: log10(PSD_ratio) heatmap + small 3D surface inset (publication-friendly).
-- Nature Methods-ish style: Arial, ~1pt lines.
 - Export source data CSVs for per-pair mismatch and per-pair PSD.
 """
 
@@ -121,7 +120,6 @@ def set_pub_style():
 
 
 PALETTE = {
-    # Nature Methods friendly (muted, high-contrast, color-blind safe-ish)
     'blue': '#0072B2',
     'orange': '#D55E00',
     'gray': '#4D4D4D',
