@@ -275,7 +275,7 @@ def save_results(results: List[Dict[str, Any]], stats: Dict[str, Any], output_di
         df_summary = pd.DataFrame(summary_rows)
         df_summary.to_csv(summary_path, index=False)
 
-    print(f"\n✅ Results saved to:")
+    print(f"\n Results saved to:")
     print(f"   - {detailed_path}")
     print(f"   - {metrics_path}")
     print(f"   - {summary_path}")
@@ -334,11 +334,11 @@ def main():
     results = collect_all_probe_results()
 
     if not results:
-        print("❌ No probe experiment results found!")
-        print("   Please make sure you have run the probe stage experiments.")
+        print("No probe experiment results found!")
+        print("Please make sure you have run the probe stage experiments.")
         return
 
-    print(f"✅ Found {len(results)} probe experiment results")
+    print(f"Found {len(results)} probe experiment results")
 
     # Compute statistics
     print("\nComputing statistics...")
@@ -351,7 +351,7 @@ def main():
     print("\nSaving results...")
     save_results(results, stats, CONFIG["OUTPUT_DIR"])
 
-    print("\n✅ Statistical analysis completed!")
+    print("\n Statistical analysis completed!")
     print(f"\nNext step: run the visualization script to generate plots")
     print(f"  python3 visualize_probe_stats.py")
 
