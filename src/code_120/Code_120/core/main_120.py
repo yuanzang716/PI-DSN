@@ -2124,7 +2124,7 @@ class AdvancedPhysicsLoss(nn.Module):
         return 1.0 - r.mean()
 
     def forward(self, pred_img, target_img):
-        # Strong intensity normalization BEFORE all physics terms (requirement #8)
+        # Strong intensity normalization BEFORE all physics terms
         pred_n = self.instance_norm(pred_img)
         tgt_n  = self.instance_norm(target_img)
 
@@ -2889,7 +2889,7 @@ class DualStemNet(nn.Module):
         h = self.fuse(torch.cat([feat, cond], dim=1))
         z = self.emb_head(h)
 
-        # residual log-space diameter (requirement #6)
+        # residual log-space diameter
         delta_raw = self.delta_head(h)
         delta = self.config.DELTA_CLIP * torch.tanh(delta_raw)  # smooth clip
         log_d = c + delta
